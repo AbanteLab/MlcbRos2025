@@ -15,7 +15,7 @@ Models and utils files can be found in [this link](https://github.com/AbanteLab/
 
 ## 📂 Folder structure
 ---
-<pre><code>```
+<pre><code>
 ├── gen_mod_ca_img/
 |   └── train_dgm.py
 |   └── train_effa.py
@@ -31,10 +31,7 @@ Models and utils files can be found in [this link](https://github.com/AbanteLab/
 │   └── benchmark_real_data.sh
 ├── requirements.txt
 └── README.md
-```</code></pre>
-
-
-<pre><code>```text 📁 Repository Structure ├── gen_mod_ca_img/ │ └── benchmark.py ├── mult_gen_mod/ │ └── ... ├── real_data/ │ └── ... ├── requirements.txt └── README.md ```</code></pre>
+</code></pre>
 
 ### Single neuron unimodal DGM
 
