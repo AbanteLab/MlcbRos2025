@@ -2,9 +2,6 @@
 Code used in Ros 2025 (submitted to MLCB 2025).
 
 ## Overview
----
-The code in this repository shows how to load the data associated with the paper 'Data driven prediciton of battery cycle life before capacity degradation' by K.A. Severson, P.M. Attia, et al. The data is available at https://data.matr.io/1/. There you can also find more details about the data.
-
 This repository contains a the codes used for training and benchmarking models mentioned in Ros 2025, including:
 
 - Single neuron unimodal VAE and BFA trained on synthetic data
@@ -14,7 +11,6 @@ This repository contains a the codes used for training and benchmarking models m
 Models and utils files can be found in [this link](https://github.com/AbanteLab/CaGenNet).
 
 ## 📂 Folder structure
----
 <pre><code>
 ├── gen_mod_ca_img/
 |   └── train_dgm.py
@@ -41,19 +37,20 @@ Here one can find tools to execute and benchmark 6 different VAE architectures o
 - **Supervised model**: The batch labels are concatenated with the input to remove batch effect in the latent representation.
 - **Denoising model**: A random mask $m$ is applied at each epoch, concatenaed with the data ($[x,m]$) and fed into the encoder. The goal is to make the model more robust to missing data.
 
-`train_dgm.py` is used for training the chosen out of the 6 models and evaluating the latent representation and reconstruction using different metrics.
-`sim_benchmark_dgm.sh` runs `train_dgm.py` for specified parameters
-`train_effa.py` is used to train Exponent Factor Analysis model with FALTAA
-`sim_benchmark_effa.sh` runs `train_effa.py` for specified parameters
-`benchmark.py` generates plots with representation and reconstruction metrics
+- `train_dgm.py`: train the chosen out of the 6 models and evaluating the latent representation and reconstruction using different metrics.
+- `sim_benchmark_dgm.sh`: run `train_dgm.py` for specified parameters.
+- `train_effa.py`:  train Bayesian Factor Analysis model.
+- `sim_benchmark_effa.sh`: run `train_effa.py` for specified parameters.
+- `benchmark.py`: plot representation and reconstruction metrics.
+- `train_dgm_real_data.py`: train the chosen out of 6 models on real data from primary cortical cultures.
+- `benchmark_real_data.sh`: plot representation and reconstruction metrics for real data.
 
 ### Single neuron multimodal DGM
-This model presents an extension of the Supervised unimodal VAE (SVAE) by adding transcriptomic data as input, therefore building a multimodal SVAE (MSVAE). In this case, 2 encoders map each modality concatenated with the labels to their own latent space and a third encoder takes [x_cal, x_rna] and maps to a shared latent space. There are 2 decoders, which take [z_cal/rna, z_shared, y_cal/rna] as input and reconstruct x_cal/rna.
+This model presents an extension of the Supervised unimodal VAE (SVAE) by adding transcriptomic data as input, therefore building a multimodal SVAE (MSVAE). In this case, 2 encoders map each modality concatenated with the labels to their own latent space and a third encoder takes $[x_{cal}, x_{rna}]$ and maps to a shared latent space. There are 2 decoders, which take $[z_{cal/rna}, z_{shared}, y_{cal/rna}]$ as input and reconstruct $x_{cal/rna}$.
 
-`train_multimodal.py` is used for training the MSVAE and evaluating the latent representation and reconstruction using different metrics.
-`sim_benchmark_mult.sh` runs `train_multimodal.py` for specified parameters
-`benchmark_mult.py` generates plots with representation and reconstruction metrics
-
+- `train_multimodal.py` is used for training the MSVAE and evaluating the latent representation and reconstruction using different metrics.
+- `sim_benchmark_mult.sh` runs `train_multimodal.py` for specified parameters
+- `benchmark_mult.py` generates plots with representation and reconstruction metrics
 
 ## Data
 
