@@ -19,11 +19,13 @@ from torch.utils.data import DataLoader, TensorDataset
 
 # Scikit-learn
 from sklearn.metrics import silhouette_score
+from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
 
 # Our modules
 from ca_sn_gen_models.utils import superprint
 from ca_sn_gen_models.evaluation import evaluate_latent_svm,get_hdbscan_ari,compute_local_entropy,kBET
+from ca_sn_gen_models.multimodal import MultiModSupMlpVAE_v2 as VaeModel
 
 # Detect device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -53,15 +55,6 @@ parser.add_argument(
     required=False,
     default=100,
     help="Dimension of latent space (default: 100)"
-)
-
-parser.add_argument(
-    "--model",
-    type=str,
-    required=False,
-    default="MultiModMlpVAE_v0",
-    choices=["MultiModMlpVAE_v0", "MultiModMlpVAE_v1", "MultiModMlpVAE_v2"],
-    help="Model to use (choices: MultiModMlpVAE_v[0-2])"
 )
 
 parser.add_argument(
@@ -124,7 +117,6 @@ lr = args.rate
 lreg = args.lreg
 seed = args.seed
 outdir = args.outdir
-model_str = args.model
 batch_size = args.batch_size
 num_epochs = args.num_epochs
 fluo_noise = args.fluo_noise
@@ -135,30 +127,10 @@ latent_dim = args.latent_dim
 # lreg = 1e8
 # lr = 0.0001
 # num_epochs = 2
-# latent_dim = 16
+# latent_dim = 64
 # fluo_noise = 1.0
 # batch_size = 1000
-# model_str = 'MultiModMlpVAE_v1'
-# outdir = "/pool01/projects/abante_lab/snDGM/mlcb_2025/results/benchmark_multimodal/"
-
-#########################################################################################################
-# Load model
-#########################################################################################################
-
-if model_str == 'MultiModMlpVAE_v0':
-    from ca_sn_gen_models.multimodal import MultiModMlpVAE_v0 as VaeModel
-    shared_z = False
-    ind_z = True
-elif model_str == 'MultiModMlpVAE_v1':
-    from ca_sn_gen_models.multimodal import MultiModMlpVAE_v1 as VaeModel
-    shared_z = True
-    ind_z = False
-elif model_str == 'MultiModMlpVAE_v2':
-    from ca_sn_gen_models.multimodal import MultiModMlpVAE_v2 as VaeModel
-    shared_z = True
-    ind_z = True
-else:
-    raise ValueError(f"Model {model_str} not recognized. Please choose a valid model.")
+# outdir = "/pool01/projects/abante_lab/snDGM/mlcb_2025/results/benchmark_multimodal/supervised/"
 
 #########################################################################################################
 # Read in
@@ -184,6 +156,15 @@ sample_labels = meta_df['sample'].values
 
 # create group sample labels
 group_sample_labels = np.array([f'{g}_{s}' for g, s in zip(group_labels, sample_labels)])
+
+# Encode group_sample_labels using LabelEncoder
+label_encoder = LabelEncoder()
+encoded_labels = label_encoder.fit_transform(group_sample_labels)
+encoded_labels = torch.tensor(encoded_labels, dtype=torch.long)
+
+# Convert to one-hot encoding
+num_classes = len(np.unique(encoded_labels))
+oh_encoded_labels = torch.nn.functional.one_hot(encoded_labels,num_classes=num_classes)
 
 ## Simulated RNA-seq data
 
@@ -259,9 +240,13 @@ xrna_train_data = xrna[train_indices]
 xcal_val_data = xcal[val_indices]
 xrna_val_data = xrna[val_indices]
 
+# split labels
+train_labels = oh_encoded_labels[train_indices]
+val_labels = oh_encoded_labels[val_indices]
+
 # create datasets
-train_dataset = TensorDataset(xcal_train_data, xrna_train_data)
-val_dataset = TensorDataset(xcal_val_data, xrna_val_data)
+train_dataset = TensorDataset(xcal_train_data, xrna_train_data, train_labels)
+val_dataset = TensorDataset(xcal_val_data, xrna_val_data, val_labels)
 
 # create data loaders
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
@@ -274,11 +259,11 @@ val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 superprint('Training model...')
 
 # model path
-model_suff = f'{model_str}_seed_{seed}_latent_{latent_dim}_lreg_{lreg}'
-model_path = f'{outdir}/{model_suff}.pt'
+model_suff = f'MultiModSupMlpVAE_seed_{seed}_latent_{latent_dim}_lreg_{lreg}'
+model_path = f'{outdir}/models/{model_suff}.pt'
 
 # Initialize the FA model
-model = VaeModel(xcal.shape[1], xrna.shape[1], latent_dim, device=device)
+model = VaeModel(xcal.shape[1], xrna.shape[1], num_classes, latent_dim, device=device)
 
 if not os.path.exists(model_path):
     
@@ -370,18 +355,9 @@ x0_val = x0[val_indices]
 superprint('Getting posterior estimates...')
 
 # forward pass
-if model_str in ['MultiModMlpVAE_v0']:
-    zloc_tr_cal, xhat_tr_cal, zloc_tr_rna, xhat_tr_rna = model.forward(train_loader)
-    zloc_val_cal, xhat_val_cal, zloc_val_rna, xhat_val_rna = model.forward(val_loader)
-    zloc_tr = torch.cat([zloc_tr_cal, zloc_tr_rna], dim=0)
-elif model_str in ['MultiModMlpVAE_v1']:
-    zloc_tr, xhat_tr_cal, xhat_tr_rna = model.forward(train_loader)
-    zloc_val, xhat_val_cal, xhat_val_rna = model.forward(val_loader)
-elif model_str in ['MultiModMlpVAE_v2']:
-    zloc_tr, zloc_tr_cal, zloc_tr_rna, xhat_tr_cal, xhat_tr_rna = model.forward(train_loader)
-    zloc_val, zloc_val_cal, zloc_val_rna, xhat_val_cal, xhat_val_rna = model.forward(val_loader)
-else:
-    raise ValueError(f"Model {model_str} not recognized. Please choose a valid model.")
+zloc_tr, zloc_tr_cal, zloc_tr_rna, xhat_tr_cal, xhat_tr_rna = model.forward(train_loader)
+zloc_val, zloc_val_cal, zloc_val_rna, xhat_val_cal, xhat_val_rna = model.forward(val_loader)
+
 
 #########################################################################################################
 # EMBEDDING
@@ -397,31 +373,17 @@ sample_labels = meta_df['sample'].values[train_indices]
 firing_type_labels = meta_df['firing_type'].values[train_indices]
 mean_firing_label = xcal_mean[train_indices].squeeze(1).cpu().numpy()
 
-if shared_z:
-
-    # Create a DataFrame for easier plotting with seaborn
-    umap_df = pd.DataFrame({
-        'UMAP1': Z_umap[:, 0],
-        'UMAP2': Z_umap[:, 1],
-        'Group': group_labels,
-        'Sample': sample_labels,
-        'FiringType': firing_type_labels,
-        'MeanFiring': mean_firing_label,
-        'Modality': ['Calcium+RNA'] * zloc_tr.shape[0]
-    })
-
-else:
-
-    # Create a DataFrame for easier plotting with seaborn
-    umap_df = pd.DataFrame({
-        'UMAP1': Z_umap[:, 0],
-        'UMAP2': Z_umap[:, 1],
-        'Group': np.concatenate([group_labels, group_labels]),
-        'Sample': np.concatenate([sample_labels, sample_labels]),
-        'FiringType': np.concatenate([firing_type_labels, firing_type_labels]),
-        'MeanFiring': np.concatenate([mean_firing_label, mean_firing_label]),
-        'Modality': ['Calcium'] * len(zloc_tr_cal) + ['RNA'] * len(zloc_tr_rna)
-    })
+# Create a DataFrame for easier plotting with seaborn
+umap_df = pd.DataFrame({
+    'UMAP1': Z_umap[:, 0],
+    'UMAP2': Z_umap[:, 1],
+    'Group': group_labels,
+    'Sample': sample_labels,
+    'FiringType': firing_type_labels,
+    'MeanFiring': mean_firing_label,
+    'Modality': ['Calcium+RNA'] * zloc_tr.shape[0],
+    'GroupSample': group_sample_labels[train_indices]
+})
 
 # Plot using seaborn for Group and Sample, without splitting by Modality
 plt.figure(figsize=(8, 6))
@@ -455,6 +417,62 @@ plt.title("UMAP of Latent Variables Z (Colored by Group and Sample)")
 plt.xlabel("UMAP Dimension 1")
 plt.ylabel("UMAP Dimension 2")
 plt.legend(title="Modality and Firing", bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.tight_layout()
+plt.show()
+
+# Plot using seaborn for Group and Sample, without splitting by Modality
+plt.figure(figsize=(8, 6))
+sns.scatterplot(
+    data=umap_df,
+    x='UMAP1',
+    y='UMAP2',
+    hue='GroupSample',
+    style='Modality',
+    palette='Set2',
+    s=30
+)
+plt.title("UMAP of Latent Variables Z (Colored by Group and Sample)")
+plt.xlabel("UMAP Dimension 1")
+plt.ylabel("UMAP Dimension 2")
+plt.legend(title="Modality and Firing", bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.tight_layout()
+plt.show()
+
+
+# UMAP for calcium
+umap_cal = umap.UMAP(n_components=2, random_state=seed)
+zloc_tr_cal_umap = umap_cal.fit_transform(zloc_tr_cal.cpu().detach().numpy())
+zloc_val_cal_umap = umap_cal.transform(zloc_val_cal.cpu().detach().numpy())
+# UMAP for RNA
+umap_rna = umap.UMAP(n_components=2, random_state=seed)
+zloc_tr_rna_umap = umap_rna.fit_transform(zloc_tr_rna.cpu().detach().numpy())
+zloc_val_rna_umap = umap_rna.transform(zloc_val_rna.cpu().detach().numpy())
+
+# # Plotting
+fig, axs = plt.subplots(1, 2, figsize=(12, 6))  
+# Calcium
+sns.scatterplot(
+    x=zloc_tr_cal_umap[:, 0], 
+    y=zloc_tr_cal_umap[:, 1], 
+    hue=group_sample_labels[train_indices], 
+    ax=axs[0], 
+    palette="viridis", 
+    alpha=0.7, 
+    s=10
+)
+axs[0].set_title('Latent Space - Calcium (Train)')
+
+sns.scatterplot(
+    x=zloc_tr_rna_umap[:, 0], 
+    y=zloc_tr_rna_umap[:, 1], 
+    hue=group_sample_labels[train_indices], 
+    ax=axs[1], 
+    palette="viridis", 
+    alpha=0.7, 
+    s=10
+)
+axs[1].set_title('Latent Space - RNA (Train)')
+
 plt.tight_layout()
 plt.show()
 
@@ -492,190 +510,131 @@ mae_xcal = torch.nn.functional.l1_loss(x0_val, xhat_val_cal.cpu(), reduction='me
 # Evaluation of the latent representation (RNA)
 ###############################################################################################
 
-if shared_z:
 
-    superprint('Evaluating latent representation (Cal+RNA)...')
+superprint('Evaluating latent representation (Cal+RNA)...')
 
-    ## 1. silhouette score
+## 1. silhouette score
 
-    sil_train = silhouette_score(zloc_tr.cpu(), firing_labels[train_indices])
-    sil_val = silhouette_score(zloc_val.cpu(), firing_labels[val_indices])
-    superprint(f'Silhouette training: {sil_train:.4f}')
-    superprint(f'Silhouette validation: {sil_val:.4f}')
+sil_train = silhouette_score(zloc_tr.cpu(), firing_labels[train_indices])
+sil_val = silhouette_score(zloc_val.cpu(), firing_labels[val_indices])
+superprint(f'Silhouette training: {sil_train:.4f}')
+superprint(f'Silhouette validation: {sil_val:.4f}')
 
-    # 2. train linear SVM classifier on zloc_tr and evaluate on zloc_val
+# 2. train linear SVM classifier on zloc_tr and evaluate on zloc_val
 
-    # ba,prec,rec,f1 = evaluate_latent_svm(zloc_tr.cpu(), firing_labels[train_indices], zloc_val.cpu(), firing_labels[val_indices])
-    ba = None
-    prec = None
-    rec = None
-    f1 = None
+ba,prec,rec,f1 = evaluate_latent_svm(zloc_tr.cpu(), firing_labels[train_indices], zloc_val.cpu(), firing_labels[val_indices])
+superprint(f'Balanced accuracy: {ba:.4f}')
+superprint(f'Precision: {prec:.4f}')
+superprint(f'Recall: {rec:.4f}')
+superprint(f'F1: {f1:.4f}')
 
-    # superprint(f'Balanced accuracy: {ba:.4f}')
-    # superprint(f'Precision: {prec:.4f}')
-    # superprint(f'Recall: {rec:.4f}')
-    # superprint(f'F1: {f1:.4f}')
+## 3. ARI for HDBSCAN
 
-    ## 3. ARI for HDBSCAN
+clust_train, ari_train = get_hdbscan_ari(zloc_tr.cpu(), firing_labels[train_indices])
+clust_val, ari_val = get_hdbscan_ari(zloc_val.cpu(), firing_labels[val_indices])
+superprint(f'ARI train: {ari_train:.4f}')
+superprint(f'ARI val: {ari_val:.4f}')
 
-    clust_train, ari_train = get_hdbscan_ari(zloc_tr.cpu(), firing_labels[train_indices])
-    clust_val, ari_val = get_hdbscan_ari(zloc_val.cpu(), firing_labels[val_indices])
-    superprint(f'ARI train: {ari_train:.4f}')
-    superprint(f'ARI val: {ari_val:.4f}')
+## 4. Local entropy
 
-    ## 4. Local entropy
+med_entropy_tr = compute_local_entropy(zloc_tr.cpu(), firing_labels[train_indices], k=100)
+med_entropy_val = compute_local_entropy(zloc_val.cpu(), firing_labels[val_indices], k=100)
+superprint(f'Median local entropy in training: {med_entropy_tr:.4f} bits')
+superprint(f'Median local entropy in validation: {med_entropy_val:.4f} bits')
 
-    med_entropy_tr = compute_local_entropy(zloc_tr.cpu(), firing_labels[train_indices], k=100)
-    med_entropy_val = compute_local_entropy(zloc_val.cpu(), firing_labels[val_indices], k=100)
-    superprint(f'Median local entropy in training: {med_entropy_tr:.4f} bits')
-    superprint(f'Median local entropy in validation: {med_entropy_val:.4f} bits')
+## 5. kBET
+kbet_tr = kBET(zloc_tr.cpu(), group_sample_labels[train_indices])
+kbet_val = kBET(zloc_val.cpu(), group_sample_labels[val_indices])
+superprint(f"Rejection rate kBET (train): {kbet_tr:.3f}")
+superprint(f"Rejection rate kBET (val): {kbet_val:.3f}")
 
-    ## 5. kBET
-    kbet_tr = kBET(zloc_tr.cpu(), group_sample_labels[train_indices])
-    kbet_val = kBET(zloc_val.cpu(), group_sample_labels[val_indices])
-    superprint(f"Rejection rate kBET (train): {kbet_tr:.3f}")
-    superprint(f"Rejection rate kBET (val): {kbet_val:.3f}")
-
-else:
-
-    # set all to None
-    sil_train = None
-    sil_val = None
-    ba = None
-    prec = None
-    rec = None
-    f1 = None
-    ari_train = None
-    ari_val = None
-    clust_train = None
-    clust_val = None
-    med_entropy_tr = None
-    med_entropy_val = None
-    kbet_tr = None
-    kbet_val = None
 
 ###############################################################################################
 # Evaluation of the latent representation (RNA)
 ###############################################################################################
+        
+superprint('Evaluating latent representation (RNA)...')
 
-if ind_z:
+## 1. silhouette score
 
-    superprint('Evaluating latent representation (RNA)...')
+sil_train_rna = silhouette_score(zloc_tr_rna.cpu(), firing_labels[train_indices])
+sil_val_rna = silhouette_score(zloc_val_rna.cpu(), firing_labels[val_indices])
+superprint(f'Silhouette training (RNA): {sil_train_rna:.4f}')
+superprint(f'Silhouette validation (RNA): {sil_val_rna:.4f}')
 
-    ## 1. silhouette score
+# 2. train linear SVM classifier on zloc_tr and evaluate on zloc_val
 
-    sil_train_rna = silhouette_score(zloc_tr_rna.cpu(), firing_labels[train_indices])
-    sil_val_rna = silhouette_score(zloc_val_rna.cpu(), firing_labels[val_indices])
-    superprint(f'Silhouette training (RNA): {sil_train_rna:.4f}')
-    superprint(f'Silhouette validation (RNA): {sil_val_rna:.4f}')
+ba_rna,prec_rna,rec_rna,f1_rna = evaluate_latent_svm(zloc_tr_rna.cpu(), firing_labels[train_indices], zloc_val_rna.cpu(), firing_labels[val_indices])
+superprint(f'Balanced accuracy (RNA): {ba_rna:.4f}')
+superprint(f'Precision (RNA): {prec_rna:.4f}')
+superprint(f'Recall (RNA): {rec_rna:.4f}')
+superprint(f'F1 (RNA): {f1_rna:.4f}')
 
-    # 2. train linear SVM classifier on zloc_tr and evaluate on zloc_val
+## 3. ARI for HDBSCAN
 
-    ba_rna,prec_rna,rec_rna,f1_rna = evaluate_latent_svm(zloc_tr_rna.cpu(), firing_labels[train_indices], zloc_val_rna.cpu(), firing_labels[val_indices])
-    superprint(f'Balanced accuracy (RNA): {ba_rna:.4f}')
-    superprint(f'Precision (RNA): {prec_rna:.4f}')
-    superprint(f'Recall (RNA): {rec_rna:.4f}')
-    superprint(f'F1 (RNA): {f1_rna:.4f}')
+clust_train_rna, ari_train_rna = get_hdbscan_ari(zloc_tr_rna.cpu(), firing_labels[train_indices])
+clust_val_rna, ari_val_rna = get_hdbscan_ari(zloc_val_rna.cpu(), firing_labels[val_indices])
+superprint(f'ARI train (RNA): {ari_train_rna:.4f}')
+superprint(f'ARI val (RNA): {ari_val_rna:.4f}')
 
-    ## 3. ARI for HDBSCAN
+## 4. Local entropy
 
-    clust_train_rna, ari_train_rna = get_hdbscan_ari(zloc_tr_rna.cpu(), firing_labels[train_indices])
-    clust_val_rna, ari_val_rna = get_hdbscan_ari(zloc_val_rna.cpu(), firing_labels[val_indices])
-    superprint(f'ARI train (RNA): {ari_train_rna:.4f}')
-    superprint(f'ARI val (RNA): {ari_val_rna:.4f}')
+med_entropy_tr_rna = compute_local_entropy(zloc_tr_rna.cpu(), firing_labels[train_indices], k=100)
+med_entropy_val_rna = compute_local_entropy(zloc_val_rna.cpu(), firing_labels[val_indices], k=100)
+superprint(f'Median local entropy in training (RNA): {med_entropy_tr_rna:.4f} bits')
+superprint(f'Median local entropy in validation (RNA): {med_entropy_val_rna:.4f} bits')
 
-    ## 4. Local entropy
+## 5. kBET
+kbet_tr_rna = kBET(zloc_tr_rna.cpu(), group_sample_labels[train_indices])
+kbet_val_rna = kBET(zloc_val_rna.cpu(), group_sample_labels[val_indices])
+superprint(f"Rejection rate kBET (train RNA): {kbet_tr_rna:.3f}")
+superprint(f"Rejection rate kBET (val RNA): {kbet_val_rna:.3f}")
 
-    med_entropy_tr_rna = compute_local_entropy(zloc_tr_rna.cpu(), firing_labels[train_indices], k=100)
-    med_entropy_val_rna = compute_local_entropy(zloc_val_rna.cpu(), firing_labels[val_indices], k=100)
-    superprint(f'Median local entropy in training (RNA): {med_entropy_tr_rna:.4f} bits')
-    superprint(f'Median local entropy in validation (RNA): {med_entropy_val_rna:.4f} bits')
 
-    ## 5. kBET
-    kbet_tr_rna = kBET(zloc_tr_rna.cpu(), group_sample_labels[train_indices])
-    kbet_val_rna = kBET(zloc_val_rna.cpu(), group_sample_labels[val_indices])
-    superprint(f"Rejection rate kBET (train RNA): {kbet_tr_rna:.3f}")
-    superprint(f"Rejection rate kBET (val RNA): {kbet_val_rna:.3f}")
-
-else:
-    
-    # set all to None
-    sil_train_rna = None
-    sil_val_rna = None
-    ba_rna = None
-    prec_rna = None
-    rec_rna = None
-    f1_rna = None
-    ari_train_rna = None
-    ari_val_rna = None
-    clust_train_rna = None
-    clust_val_rna = None
-    med_entropy_tr_rna = None
-    med_entropy_val_rna = None
-    kbet_tr_rna = None
-    kbet_val_rna = None
 
 ###############################################################################################
 # Evaluation of the latent representation (Calcium)
 ###############################################################################################
 
-if ind_z:
 
-    superprint('Evaluating latent representation (Calcium)...')
+superprint('Evaluating latent representation (Calcium)...')
 
-    ## 1. silhouette score
+## 1. silhouette score
 
-    sil_train_cal = silhouette_score(zloc_tr_cal.cpu(), firing_labels[train_indices])
-    sil_val_cal = silhouette_score(zloc_val_cal.cpu(), firing_labels[val_indices])
-    superprint(f'Silhouette training (Cal): {sil_train_cal:.4f}')
-    superprint(f'Silhouette validation (Cal): {sil_val_cal:.4f}')
+sil_train_cal = silhouette_score(zloc_tr_cal.cpu(), firing_labels[train_indices])
+sil_val_cal = silhouette_score(zloc_val_cal.cpu(), firing_labels[val_indices])
+superprint(f'Silhouette training (Cal): {sil_train_cal:.4f}')
+superprint(f'Silhouette validation (Cal): {sil_val_cal:.4f}')
 
-    # 2. train linear SVM classifier on zloc_tr and evaluate on zloc_val
+# 2. train linear SVM classifier on zloc_tr and evaluate on zloc_val
 
-    ba_cal,prec_cal,rec_cal,f1_cal = evaluate_latent_svm(zloc_tr_cal.cpu(), firing_labels[train_indices], zloc_val_cal.cpu(), firing_labels[val_indices])
-    superprint(f'Balanced accuracy (Cal): {ba_cal:.4f}')
-    superprint(f'Precision (Cal): {prec_cal:.4f}')
-    superprint(f'Recall (Cal): {rec_cal:.4f}')
-    superprint(f'F1 (Cal): {f1_cal:.4f}')
+ba_cal,prec_cal,rec_cal,f1_cal = evaluate_latent_svm(zloc_tr_cal.cpu(), firing_labels[train_indices], zloc_val_cal.cpu(), firing_labels[val_indices])
+superprint(f'Balanced accuracy (Cal): {ba_cal:.4f}')
+superprint(f'Precision (Cal): {prec_cal:.4f}')
+superprint(f'Recall (Cal): {rec_cal:.4f}')
+superprint(f'F1 (Cal): {f1_cal:.4f}')
 
-    ## 3. ARI for HDBSCAN
+## 3. ARI for HDBSCAN
 
-    clust_train_cal, ari_train_cal = get_hdbscan_ari(zloc_tr_cal.cpu(), firing_labels[train_indices])
-    clust_val_cal, ari_val_cal = get_hdbscan_ari(zloc_val_cal.cpu(), firing_labels[val_indices])
-    superprint(f'ARI train (Cal): {ari_train_cal:.4f}')
-    superprint(f'ARI val (Cal): {ari_val_cal:.4f}')
+clust_train_cal, ari_train_cal = get_hdbscan_ari(zloc_tr_cal.cpu(), firing_labels[train_indices])
+clust_val_cal, ari_val_cal = get_hdbscan_ari(zloc_val_cal.cpu(), firing_labels[val_indices])
+superprint(f'ARI train (Cal): {ari_train_cal:.4f}')
+superprint(f'ARI val (Cal): {ari_val_cal:.4f}')
 
-    ## 4. Local entropy
+## 4. Local entropy
 
-    med_entropy_tr_cal = compute_local_entropy(zloc_tr_cal.cpu(), firing_labels[train_indices], k=100)
-    med_entropy_val_cal = compute_local_entropy(zloc_val_cal.cpu(), firing_labels[val_indices], k=100)
-    superprint(f'Median local entropy in training (Cal): {med_entropy_tr_cal:.4f} bits')
-    superprint(f'Median local entropy in validation (Cal): {med_entropy_val_cal:.4f} bits')
+med_entropy_tr_cal = compute_local_entropy(zloc_tr_cal.cpu(), firing_labels[train_indices], k=100)
+med_entropy_val_cal = compute_local_entropy(zloc_val_cal.cpu(), firing_labels[val_indices], k=100)
+superprint(f'Median local entropy in training (Cal): {med_entropy_tr_cal:.4f} bits')
+superprint(f'Median local entropy in validation (Cal): {med_entropy_val_cal:.4f} bits')
 
-    ## 5. kBET
+## 5. kBET
 
-    kbet_tr_cal = kBET(zloc_tr_cal.cpu(), group_sample_labels[train_indices])
-    kbet_val_cal = kBET(zloc_val_cal.cpu(), group_sample_labels[val_indices])
-    superprint(f"Rejection rate kBET (train): {kbet_tr_cal:.3f}")
-    superprint(f"Rejection rate kBET (val): {kbet_val_cal:.3f}")
+kbet_tr_cal = kBET(zloc_tr_cal.cpu(), group_sample_labels[train_indices])
+kbet_val_cal = kBET(zloc_val_cal.cpu(), group_sample_labels[val_indices])
+superprint(f"Rejection rate kBET (train): {kbet_tr_cal:.3f}")
+superprint(f"Rejection rate kBET (val): {kbet_val_cal:.3f}")
 
-else:
-
-    # set all to None
-    sil_train_cal = None
-    sil_val_cal = None
-    ba_cal = None
-    prec_cal = None
-    rec_cal = None
-    f1_cal = None
-    ari_train_cal = None
-    ari_val_cal = None
-    clust_train_cal = None
-    clust_val_cal = None
-    med_entropy_tr_cal = None
-    med_entropy_val_cal = None
-    kbet_tr_cal = None
-    kbet_val_cal = None
 
 #########################################################################################################
 # Save results
@@ -687,7 +646,7 @@ superprint('Storing summary...')
 results_df = pd.DataFrame({
     'seed': [seed],
     'fluo_noise': [fluo_noise],
-    'model': [model_str],
+    'model': 'MultiModSupMlpVAE',
     'z_lreg': [lreg],
     'beta': [1.0],
     'lr': [lr],
@@ -740,7 +699,7 @@ results_df = pd.DataFrame({
 #%%
 
 # Append the dataframe to a text file
-results_file = f'{outdir}/results_summary_model_{model_str}_kbet.txt'
+results_file = f'{outdir}/results_summary_model_MultiModSupMlpVAE.txt'
 header = not os.path.exists(results_file)
 results_df.to_csv(results_file, mode='a', header=header, index=False, sep='\t')
 superprint(f'Results saved to {results_file}')
