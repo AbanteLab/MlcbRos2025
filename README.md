@@ -29,6 +29,7 @@ Models and utils files can be found in [this link](https://github.com/AbanteLab/
 └── README.md
 </code></pre>
 
+## Models
 ### Single neuron unimodal DGM
 ---
 
