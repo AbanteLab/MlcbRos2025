@@ -49,7 +49,7 @@ Here one can find tools to execute and benchmark 6 different VAE architectures o
 
 ### Single neuron multimodal DGM
 ---
-This model presents an extension of the Supervised unimodal VAE (SVAE) by adding transcriptomic data as input, therefore building a multimodal SVAE (MSVAE). In this case, 2 encoders map each modality concatenated with the labels to their own latent space and a third encoder takes $[x_{cal}, x_{rna}]$ and maps to a shared latent space. There are 2 decoders, which take $[z_{cal/rna}, z_{shared}, y_{cal/rna}]$ as input and reconstruct $x_{cal/rna}$.
+This model presents an extension of the Supervised unimodal VAE (SVAE) by adding transcriptomic data as input, therefore building a multimodal SVAE (MSVAE). In this case, 2 encoders map each modality concatenated with the labels to their own latent space and a third encoder takes $[x_{cal}, x_{rna}]$ and maps to a shared latent space. There are 2 decoders, which take $[z_{cal/rna}, z_{shared}, y_{cal/rna}]$ as input and reconstruct $\hat{x}_{cal/rna}$.
 
 #### Code
 - `train_multimodal.py` is used for training the MSVAE and evaluating the latent representation and reconstruction using different metrics.
